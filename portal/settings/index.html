@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaxMann Research Tool — Settings</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar is-white is-bordered-bottom" role="navigation">
+    <div class="navbar-brand">
+      <span class="navbar-item">TaxMann Research Tool</span>
+    </div>
+    <div class="navbar-menu">
+      <div class="navbar-end">
+        <a class="navbar-item" href="/dashboard">Dashboard</a>
+        <a class="navbar-item" href="/settings" aria-current="page"><strong>Settings</strong></a>
+        <a class="navbar-item" id="logout-btn">Logout</a>
+      </div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container" style="max-width: 640px;">
+
+      <!-- TaxMann Credentials -->
+      <div class="card mb-5">
+        <div class="card-content">
+          <p class="title is-5">TaxMann Credentials</p>
+          <p class="is-size-7 has-text-grey mb-4">
+            Your TaxMann login is stored encrypted and used only to fetch documents on your behalf.
+          </p>
+          <div id="flash-tx" class="flash notification"></div>
+          <div class="field">
+            <label class="label">Email</label>
+            <div class="control">
+              <input id="tx-email" class="input" type="email" placeholder="you@example.com" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="label">Password</label>
+            <div class="control">
+              <input id="tx-password" class="input" type="password" placeholder="Your TaxMann password" />
+            </div>
+          </div>
+          <div class="field is-grouped">
+            <div class="control">
+              <button id="tx-test-save-btn" class="button is-link">Test &amp; Save</button>
+            </div>
+            <div class="control">
+              <button id="tx-remove-btn" class="button is-danger is-light">Remove</button>
+            </div>
+          </div>
+          <p class="is-size-7 has-text-grey mt-2" id="tx-cred-status">Not configured yet</p>
+        </div>
+      </div>
+
+      <!-- MCP Endpoint -->
+      <div class="card mb-5">
+        <div class="card-content">
+          <p class="title is-5">Your MCP Endpoint</p>
+          <p class="is-size-7 has-text-grey mb-3">
+            Add this URL to your LLM client as an MCP server. Authentication happens automatically
+            via the OAuth flow — your client will open a browser to sign you in on first use.
+          </p>
+          <div class="field has-addons">
+            <div class="control is-expanded">
+              <input id="mcp-url" class="input is-family-monospace" type="text" readonly />
+            </div>
+            <div class="control">
+              <button id="copy-btn" class="button is-light" title="Copy to clipboard">Copy</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Profile -->
+      <div class="card mb-5">
+        <div class="card-content">
+          <p class="title is-5">Profile</p>
+          <div id="flash-profile" class="flash notification"></div>
+          <div class="field">
+            <label class="label">Display Name</label>
+            <div class="control">
+              <input id="display-name" class="input" type="text" placeholder="Your name" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="label">Email</label>
+            <div class="control">
+              <input id="email-field" class="input" type="email" disabled />
+            </div>
+          </div>
+          <button id="profile-save-btn" class="button is-link">Update Profile</button>
+        </div>
+      </div>
+
+      <!-- Change Password -->
+      <div class="card mb-5">
+        <div class="card-content">
+          <p class="title is-5">Change Password</p>
+          <div id="flash-password" class="flash notification"></div>
+          <div class="field">
+            <label class="label">New Password</label>
+            <div class="control">
+              <input id="new-password" class="input" type="password" placeholder="Minimum 6 characters" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="label">Confirm New Password</label>
+            <div class="control">
+              <input id="confirm-password" class="input" type="password" placeholder="Repeat new password" />
+            </div>
+          </div>
+          <button id="password-save-btn" class="button is-warning">Change Password</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Firebase JS SDK -->
+  <script type="module">
+    import { initializeApp }    from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, updateProfile, updatePassword, signOut }
+      from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc, deleteField, serverTimestamp }
+      from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
+    import { FIREBASE_CONFIG } from "/firebase-config.js";
+
+    const app    = initializeApp(FIREBASE_CONFIG);
+    const db     = getFirestore(app);
+    const fbAuth = getAuth(app);
+
+    const MCP_BASE = `https://${FIREBASE_CONFIG.projectId}.web.app/mcp`;
+
+    // Auth guard
+    onAuthStateChanged(fbAuth, async user => {
+      if (!user) { window.location.href = "/"; return; }
+      populateProfile(user);
+      await loadTxCredStatus(user);
+      document.getElementById("mcp-url").value = MCP_BASE;
+    });
+
+    // --- Populate profile fields ---
+    function populateProfile(user) {
+      document.getElementById("display-name").value = user.displayName || "";
+      document.getElementById("email-field").value  = user.email || "";
+    }
+
+    // --- TaxMann credential status ---
+    async function loadTxCredStatus(user) {
+      const snap = await getDoc(doc(db, "users", user.uid));
+      const email = snap.exists() ? snap.data().taxmann_email : null;
+      if (email) {
+        document.getElementById("tx-email").value = email;
+        document.getElementById("tx-cred-status").textContent = `Configured as ${email}`;
+      }
+    }
+
+    // --- Copy MCP URL ---
+    document.getElementById("copy-btn").addEventListener("click", () => {
+      const url = document.getElementById("mcp-url").value;
+      navigator.clipboard.writeText(url).then(() => {
+        document.getElementById("copy-btn").textContent = "Copied!";
+        setTimeout(() => document.getElementById("copy-btn").textContent = "Copy", 2000);
+      });
+    });
+
+    // --- Update profile ---
+    document.getElementById("profile-save-btn").addEventListener("click", async () => {
+      const flash = document.getElementById("flash-profile");
+      const name  = document.getElementById("display-name").value.trim();
+      try {
+        await updateProfile(fbAuth.currentUser, { displayName: name });
+        await setDoc(doc(db, "users", fbAuth.currentUser.uid), { display_name: name, updated_at: serverTimestamp() }, { merge: true });
+        showFlash(flash, "Profile updated.", "is-success");
+      } catch (e) {
+        showFlash(flash, "Failed to update profile.", "is-danger");
+      }
+    });
+
+    // --- Change password ---
+    document.getElementById("password-save-btn").addEventListener("click", async () => {
+      const flash   = document.getElementById("flash-password");
+      const newPwd  = document.getElementById("new-password").value;
+      const confPwd = document.getElementById("confirm-password").value;
+      if (newPwd.length < 6)  { showFlash(flash, "Password must be at least 6 characters.", "is-danger"); return; }
+      if (newPwd !== confPwd) { showFlash(flash, "Passwords do not match.", "is-danger"); return; }
+      try {
+        await updatePassword(fbAuth.currentUser, newPwd);
+        showFlash(flash, "Password changed successfully.", "is-success");
+        document.getElementById("new-password").value    = "";
+        document.getElementById("confirm-password").value = "";
+      } catch (e) {
+        const msg = e.code === "auth/requires-recent-login"
+          ? "Please log out and log back in before changing your password."
+          : "Failed to change password.";
+        showFlash(flash, msg, "is-danger");
+      }
+    });
+
+    // --- Test & save TaxMann credentials ---
+    document.getElementById("tx-test-save-btn").addEventListener("click", async () => {
+      const flash    = document.getElementById("flash-tx");
+      const email    = document.getElementById("tx-email").value.trim();
+      const password = document.getElementById("tx-password").value;
+      if (!email)    { showFlash(flash, "Email is required.", "is-danger"); return; }
+      if (!password) { showFlash(flash, "Password is required.", "is-danger"); return; }
+      try {
+        const idToken = await fbAuth.currentUser.getIdToken();
+        const body = { firebase_id_token: idToken, email, password };
+
+        const testResp = await fetch("/auth/test_credentials", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const test = await testResp.json();
+        if (!test.success) {
+          showFlash(flash, test.message || "Could not verify credentials.", "is-danger");
+          return;
+        }
+
+        const saveResp = await fetch("/auth/save_credentials", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const save = await saveResp.json();
+        if (!saveResp.ok || !save.success) {
+          showFlash(flash, save.detail || "Failed to save credentials.", "is-danger");
+          return;
+        }
+
+        document.getElementById("tx-password").value = "";
+        document.getElementById("tx-cred-status").textContent = `Configured as ${email}`;
+        showFlash(flash, "Credentials saved.", "is-success");
+      } catch (e) {
+        showFlash(flash, "Could not reach the server. Try again.", "is-danger");
+      }
+    });
+
+    // --- Remove TaxMann credentials (revocation) ---
+    document.getElementById("tx-remove-btn").addEventListener("click", async () => {
+      const flash = document.getElementById("flash-tx");
+      if (!confirm("Remove your stored TaxMann credentials? MCP tools will stop working until you add them again.")) return;
+      try {
+        await setDoc(doc(db, "users", fbAuth.currentUser.uid), {
+          taxmann_email:        deleteField(),
+          taxmann_enc_password: deleteField(),
+          updated_at:           serverTimestamp(),
+        }, { merge: true });
+        document.getElementById("tx-email").value = "";
+        document.getElementById("tx-password").value = "";
+        document.getElementById("tx-cred-status").textContent = "Not configured yet";
+        showFlash(flash, "Credentials removed.", "is-success");
+      } catch (e) {
+        showFlash(flash, "Failed to remove credentials. Try again.", "is-danger");
+      }
+    });
+
+    // --- Logout ---
+    document.getElementById("logout-btn").addEventListener("click", async () => {
+      await signOut(fbAuth);
+      window.location.href = "/";
+    });
+
+    // --- Utility ---
+    function showFlash(el, msg, cls) {
+      el.className = `flash notification ${cls} is-light`;
+      el.textContent = msg;
+      el.style.display = "block";
+      setTimeout(() => { el.style.display = "none"; }, 5000);
+    }
+  </script>
+
+</body>
+</html>

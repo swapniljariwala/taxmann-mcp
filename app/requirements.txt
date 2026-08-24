@@ -1,0 +1,18 @@
+fastapi>=0.115.0
+fastapi-mcp>=0.3.0
+# fastapi-mcp 0.4.x is incompatible with mcp 2.x (Server signature changed)
+mcp>=1.12.0,<2.0.0
+uvicorn[standard]>=0.30.0
+httpx>=0.27.0
+firebase-admin>=6.5.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+
+# TaxMann SDK dependencies
+requests
+pycryptodome
+loguru
+
+# AES-GCM credential encryption (v0.3)
+cryptography
+google-cloud-secret-manager

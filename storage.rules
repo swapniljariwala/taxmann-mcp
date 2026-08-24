@@ -1,0 +1,11 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Shared document cache — written by server (Admin SDK, bypasses rules).
+    // No direct client access needed; all reads go through the MCP server.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,46 @@
+/* TaxMann Research Tool — shared portal styles */
+
+html, body {
+  min-height: 100vh;
+  background-color: #f5f5f5;
+}
+
+/* Login page centering */
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.login-box {
+  width: 100%;
+  max-width: 420px;
+}
+
+.login-box .card {
+  border-radius: 8px;
+}
+
+/* Navbar */
+.navbar-brand .navbar-item {
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: #363636;
+}
+
+/* Flash messages */
+.flash {
+  display: none;
+  margin-bottom: 1rem;
+}
+
+/* Dashboard table */
+.usage-table th {
+  white-space: nowrap;
+}
+
+.usage-table td.endpoint {
+  font-family: monospace;
+  font-size: 0.9rem;
+}

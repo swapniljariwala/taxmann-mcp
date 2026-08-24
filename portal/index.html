@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaxMann Research Tool — Login</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="login-page">
+
+  <div class="login-box">
+    <div class="card">
+      <div class="card-content">
+
+        <p class="title has-text-centered mb-2">TaxMann Research Tool</p>
+        <!-- Subtitle changes based on mode -->
+        <p id="subtitle" class="subtitle is-6 has-text-centered has-text-grey mb-5">
+          Sign in to your account
+        </p>
+
+        <!-- OAuth context banner (shown only in OAuth flow) -->
+        <div id="oauth-banner" class="notification is-info is-light mb-4" style="display:none;">
+          <strong id="oauth-client-name"></strong> is requesting access.<br/>
+          Sign in to authorize it.
+        </div>
+
+        <div id="flash-error" class="flash notification is-danger is-light"></div>
+
+        <div class="field">
+          <label class="label">Email</label>
+          <div class="control">
+            <input id="email" class="input" type="email" placeholder="you@example.com" autocomplete="email" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="label">Password</label>
+          <div class="control">
+            <input id="password" class="input" type="password" placeholder="Password" autocomplete="current-password" />
+          </div>
+        </div>
+
+        <div class="field mt-5">
+          <button id="login-btn" class="button is-link is-fullwidth">Sign in</button>
+        </div>
+
+      </div>
+    </div>
+    <p class="has-text-centered has-text-grey mt-4 is-size-7">
+      Don't have an account? Contact your administrator.
+    </p>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, onAuthStateChanged }
+      from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+    import { FIREBASE_CONFIG } from "/firebase-config.js";
+
+    const app  = initializeApp(FIREBASE_CONFIG);
+    const auth = getAuth(app);
+
+    // Detect OAuth mode
+    const params        = new URLSearchParams(window.location.search);
+    const authRequestId = params.get("auth_request_id");
+    const isOAuthFlow   = !!authRequestId;
+
+    if (isOAuthFlow) {
+      document.getElementById("oauth-banner").style.display = "block";
+      document.getElementById("subtitle").textContent = "Sign in to authorize access";
+      // Try to extract client_id for display (optional, best-effort)
+      const clientId = params.get("client_id") || "An external application";
+      document.getElementById("oauth-client-name").textContent = clientId;
+    }
+
+    // Already logged in handling
+    onAuthStateChanged(auth, user => {
+      if (user) {
+        if (isOAuthFlow) {
+          // In OAuth mode, even if already logged in we need a fresh ID token
+          // to exchange for an auth code — handled below after login button click.
+          // Don't auto-redirect; let the user confirm by clicking Sign in.
+          // (If we wanted fully seamless, we could auto-complete here.)
+        } else {
+          window.location.href = "/dashboard";
+        }
+      }
+    });
+
+    const emailEl  = document.getElementById("email");
+    const passEl   = document.getElementById("password");
+    const btn      = document.getElementById("login-btn");
+    const flashErr = document.getElementById("flash-error");
+
+    function showError(msg) {
+      flashErr.textContent = msg;
+      flashErr.style.display = "block";
+    }
+
+    btn.addEventListener("click", async () => {
+      flashErr.style.display = "none";
+      const email    = emailEl.value.trim();
+      const password = passEl.value;
+
+      if (!email || !password) {
+        showError("Please enter your email and password.");
+        return;
+      }
+
+      btn.classList.add("is-loading");
+      try {
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+
+        if (isOAuthFlow) {
+          // Exchange Firebase ID token for an auth code via /auth/complete
+          const idToken = await cred.user.getIdToken();
+          const res = await fetch("/auth/complete", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ auth_request_id: authRequestId, firebase_id_token: idToken }),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Authorization failed. Please try again.");
+          }
+
+          const { code, state, redirect_uri } = await res.json();
+
+          // Redirect back to LLM client with the auth code
+          const callbackUrl = new URL(redirect_uri);
+          callbackUrl.searchParams.set("code", code);
+          if (state) callbackUrl.searchParams.set("state", state);
+          window.location.href = callbackUrl.toString();
+
+        } else {
+          // Normal login — go to dashboard
+          window.location.href = "/dashboard";
+        }
+
+      } catch (err) {
+        btn.classList.remove("is-loading");
+        // Firebase auth errors have a .code; our thrown errors have .message
+        showError(err.code ? friendlyError(err.code) : (err.message || "Sign-in failed."));
+      }
+    });
+
+    [emailEl, passEl].forEach(el => {
+      el.addEventListener("keydown", e => { if (e.key === "Enter") btn.click(); });
+    });
+
+    function friendlyError(code) {
+      switch (code) {
+        case "auth/invalid-credential":
+        case "auth/user-not-found":
+        case "auth/wrong-password":  return "Invalid email or password.";
+        case "auth/too-many-requests": return "Too many attempts. Please try again later.";
+        default:                     return "Sign-in failed. Please try again.";
+      }
+    }
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaxMann Research Tool — Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .bar-cell { vertical-align: middle; }
+    .bar-wrap { background: #f0f0f0; border-radius: 4px; height: 12px; min-width: 120px; }
+    .bar-fill  { background: #3273dc; border-radius: 4px; height: 12px; transition: width 0.3s; }
+    .total-pill { font-weight: 600; }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar is-white is-bordered-bottom" role="navigation">
+    <div class="navbar-brand">
+      <span class="navbar-item">TaxMann Research Tool</span>
+    </div>
+    <div class="navbar-menu">
+      <div class="navbar-end">
+        <a class="navbar-item" href="/dashboard" aria-current="page"><strong>Dashboard</strong></a>
+        <a class="navbar-item" href="/settings">Settings</a>
+        <a class="navbar-item" id="logout-btn">Logout</a>
+      </div>
+    </div>
+  </nav>
+
+  <section class="section">
+    <div class="container">
+
+      <div class="level mb-5">
+        <div class="level-left">
+          <div class="level-item">
+            <div>
+              <p class="title is-4">Usage Dashboard</p>
+              <p class="subtitle is-6 has-text-grey">TaxMann MCP tool usage — last 7 days</p>
+            </div>
+          </div>
+        </div>
+        <div class="level-right">
+          <div class="level-item">
+            <div class="select">
+              <select id="date-range">
+                <option value="7" selected>Last 7 days</option>
+                <option value="14">Last 14 days</option>
+                <option value="30">Last 30 days</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Summary cards -->
+      <div class="columns mb-5" id="summary-cards">
+        <div class="column">
+          <div class="card has-text-centered">
+            <div class="card-content">
+              <p class="heading">Total Calls</p>
+              <p class="title" id="card-total">—</p>
+            </div>
+          </div>
+        </div>
+        <div class="column">
+          <div class="card has-text-centered">
+            <div class="card-content">
+              <p class="heading">Documents Opened</p>
+              <p class="title" id="card-docs">—</p>
+            </div>
+          </div>
+        </div>
+        <div class="column">
+          <div class="card has-text-centered">
+            <div class="card-content">
+              <p class="heading">Searches</p>
+              <p class="title" id="card-searches">—</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Daily breakdown table -->
+      <div class="card">
+        <div class="card-content">
+          <p class="title is-5 mb-4">Daily Breakdown by Endpoint</p>
+          <div id="table-loading" class="has-text-centered py-4">
+            <span class="has-text-grey">Loading…</span>
+          </div>
+          <div id="table-wrap" style="display:none; overflow-x: auto;">
+            <table class="table is-fullwidth is-striped is-hoverable usage-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>search_documents</th>
+                  <th>get_tabs</th>
+                  <th>open_document</th>
+                  <th>Total</th>
+                  <th class="bar-cell">Activity</th>
+                </tr>
+              </thead>
+              <tbody id="usage-tbody"></tbody>
+            </table>
+          </div>
+          <p id="no-data" class="has-text-grey has-text-centered py-4" style="display:none;">
+            No usage data yet. Start using the MCP tools to see metrics here.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Firebase JS SDK -->
+  <script type="module">
+    import { initializeApp }    from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut }
+      from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc }
+      from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
+    import { FIREBASE_CONFIG } from "/firebase-config.js";
+
+    const app    = initializeApp(FIREBASE_CONFIG);
+    const fbAuth = getAuth(app);
+    const db     = getFirestore(app);
+
+    // Tool endpoint names as incremented by _increment_usage() in app/main.py.
+    // Docs opened = open_document, searches = search_documents, get_tabs is
+    // counted in totals only.
+    const ENDPOINTS = [
+      "search_documents",
+      "get_tabs",
+      "open_document",
+    ];
+
+    let currentUser = null;
+
+    // Auth guard
+    onAuthStateChanged(fbAuth, async user => {
+      if (!user) { window.location.href = "/"; return; }
+      currentUser = user;
+      await loadUsage(7);
+    });
+
+    document.getElementById("date-range").addEventListener("change", async e => {
+      await loadUsage(parseInt(e.target.value, 10));
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", async () => {
+      await signOut(fbAuth);
+      window.location.href = "/";
+    });
+
+    // Render a UTC "YYYY-MM-DD" key as a short readable label, e.g. "Aug 7".
+    // Parsed via local Date components so the displayed calendar day always
+    // matches the key (no timezone drift from a T00:00Z parse).
+    function formatDate(ymd) {
+      const [y, m, d] = ymd.split("-").map(Number);
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+
+    async function loadUsage(days) {
+      document.getElementById("table-loading").style.display = "block";
+      document.getElementById("table-wrap").style.display   = "none";
+      document.getElementById("no-data").style.display      = "none";
+
+      // Build date list (YYYY-MM-DD, most recent first). toISOString() yields
+      // UTC dates, which align exactly with the server's date keys written as
+      // datetime.now(timezone.utc).strftime("%Y-%m-%d") in _increment_usage().
+      const dates = [];
+      for (let i = 0; i < days; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        dates.push(d.toISOString().slice(0, 10));
+      }
+
+      // Fetch the counters doc for each date in range. Reads are allowed
+      // directly by the client under firestore.rules: match /usage/{uid}/{document=**}.
+      const dataMap = {};
+      await Promise.all(dates.map(async date => {
+        const snap = await getDoc(doc(db, "usage", currentUser.uid, date, "counters"));
+        if (snap.exists()) dataMap[date] = snap.data();
+      }));
+
+      // Aggregate summary totals across the range.
+      let totalAll = 0, totalDocs = 0, totalSearches = 0;
+      const rows = dates.map(date => {
+        const d    = dataMap[date] || {};
+        const vals = ENDPOINTS.map(ep => d[ep] || 0);
+        const rowTotal = vals.reduce((a, b) => a + b, 0);
+        totalAll      += rowTotal;
+        totalSearches += vals[0]; // search_documents
+        totalDocs     += vals[2]; // open_document
+        return { date, vals, rowTotal };
+      });
+
+      // Update summary cards
+      document.getElementById("card-total").textContent    = totalAll;
+      document.getElementById("card-docs").textContent     = totalDocs;
+      document.getElementById("card-searches").textContent = totalSearches;
+
+      document.getElementById("table-loading").style.display = "none";
+
+      if (totalAll === 0) {
+        document.getElementById("no-data").style.display = "block";
+        return;
+      }
+
+      const maxTotal = Math.max(...rows.map(r => r.rowTotal), 1);
+      const tbody    = document.getElementById("usage-tbody");
+      tbody.innerHTML = "";
+
+      rows.forEach(({ date, vals, rowTotal }) => {
+        const barPct = Math.round((rowTotal / maxTotal) * 100);
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${formatDate(date)}</td>
+          ${vals.map(v => `<td>${v || "—"}</td>`).join("")}
+          <td class="total-pill">${rowTotal || "—"}</td>
+          <td class="bar-cell">
+            <div class="bar-wrap">
+              <div class="bar-fill" style="width:${barPct}%"></div>
+            </div>
+          </td>`;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById("table-wrap").style.display = "block";
+    }
+  </script>
+
+</body>
+</html>
