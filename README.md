@@ -67,8 +67,10 @@ OFF (`SESSION_POOL_ENABLED = False`) — enable only if login rate limits bite.
 ## Security
 
 - Passwords encrypted with AES-256-GCM: `base64(nonce(12) || ct || tag(16))`.
-- DEK (32 bytes) loaded once at startup: `TAXMANN_DEK` env var (base64) →
-  Secret Manager secret `taxmann_creds_dek` (project `SECRET_MANAGER_PROJECT`).
+- DEK (32 bytes) loaded once at startup: `TAXMANN_DEK` env var (base64) or
+  Secret Manager secret `taxmann_creds_dek` (project `SECRET_MANAGER_PROJECT`)
+  take precedence; otherwise a fallback DEK is baked into the image (dev
+  convenience — rotate in Secret Manager / env before this ships beyond dev).
 - The portal client cannot encrypt (DEK is server-side); `/auth/test_credentials`
   runs a real login/logout before `/auth/save_credentials` persists anything.
   Unverified creds are never stored.
@@ -105,53 +107,87 @@ venv/Scripts/python scripts/live_smoke.py
 
 ## Deployment checklist
 
-Prereqs: a Firebase project (id used below), Firebase Auth enabled with
-admin-created email/password users, `firebase` CLI installed, Cloud Run API
+Actual project values (what this repo is deployed as):
+
+| Value | Value in use |
+|---|---|
+| GCP / Firebase project id | `my-primary-project-228515` |
+| Region | `asia-south1` |
+| Cloud Run service / image | `taxmann-mcp` / `asia-south1-docker.pkg.dev/my-primary-project-228515/taxmann-mcp/taxmann-mcp` |
+| Service URL | `https://taxmann-mcp-jjsa4ya54a-el.a.run.app` |
+| Storage bucket | `my-primary-project-228515.appspot.com` |
+| OAuth endpoint | `https://taxmann-mcp-jjsa4ya54a-el.a.run.app/mcp` |
+| Portal | `https://taxmann-mcp-jjsa4ya54a-el.a.run.app/` (Cloud Run hosts the static portal) |
+
+`portal/firebase-config.js` already contains the real Web-app config for the
+`my-primary-project-228515` project (apiKey, authDomain, storageBucket,
+messagingSenderId, appId). `app/main.py` defaults `STORAGE_BUCKET` to
+`my-primary-project-228515.appspot.com`, `.firebaserc` defaults the project to
+`my-primary-project-228515`.
+
+Prereqs: the Firebase/GCP project, Firebase Auth enabled with admin-created
+email/password users, `firebase` + `gcloud` CLI installed, Cloud Run API
 enabled, ADC configured (`gcloud auth application-default login`).
 
-1. **Fill the portal config** — `portal/firebase-config.js`:
-   apiKey/authDomain/projectId/messagingSenderId/appId from the Firebase
-   Console (Web app config). Set `projectId` to your project id everywhere
-   (`firebase.json` serviceId is the Cloud Run service name, `.firebaserc`
-   default project, `app/main.py` default `STORAGE_BUCKET`).
-
-2. **Create the DEK secret**:
+1. **Grant the Cloud Run service account access to Firestore and Storage**
+   (missing this is what breaks `/auth/authorize` and every Firestore-backed
+   route with a `500` / `403 PermissionDenied`):
    ```bash
-   python -c "import base64,os;print(base64.b64encode(os.urandom(32)).decode())" > dek.txt
-   gcloud secrets create taxmann_creds_dek --data-file=dek.txt
-   gcloud secrets versions add taxmann_creds_dek --data-file=dek.txt
+   # SA is the default compute SA unless the service pins a custom one:
+   #   gcloud run services describe taxmann-mcp --region asia-south1 \
+   #     --format "value(spec.template.spec.serviceAccountName)"
+   SA=1045524373148-compute@developer.gserviceaccount.com
+   gcloud projects add-iam-policy-binding my-primary-project-228515 \
+     --member="serviceAccount:$SA" --role="roles/datastore.user"   # Firestore
+   gcloud projects add-iam-policy-binding my-primary-project-228515 \
+     --member="serviceAccount:$SA" --role="roles/storage.admin"    # doc cache
    ```
-   Grant the Cloud Run runtime service account `Secret Accessor` on it.
+   Firestore uses the Datastore IAM roles; reads *and* writes need
+   `roles/datastore.user`. IAM propagation takes ~1–3 min before a redeployed
+   service picks it up.
 
-3. **Deploy the Cloud Run service** (Docker build — the image embeds the
+2. **Deploy the Cloud Run service** (Docker build — the image embeds the
    TaxMann SDK from the sibling repo, so the build context must be the parent
    of both repos; see AGENTS.md):
    ```bash
    cd C:/Users/swapnil/pyapps
    docker build -f taxmann-mcp/Dockerfile -t taxmann-mcp .
 
-   # push to Artifact Registry, then deploy (authenticate docker once:
-   # gcloud auth configure-docker asia-south1-docker.pkg.dev)
-   docker tag taxmann-mcp asia-south1-docker.pkg.dev/<project>/taxmann-mcp/taxmann-mcp
-   docker push asia-south1-docker.pkg.dev/<project>/taxmann-mcp/taxmann-mcp
+   # authenticate docker once:
+   gcloud auth configure-docker asia-south1-docker.pkg.dev
+   docker tag taxmann-mcp \
+     asia-south1-docker.pkg.dev/my-primary-project-228515/taxmann-mcp/taxmann-mcp
+   docker push asia-south1-docker.pkg.dev/my-primary-project-228515/taxmann-mcp/taxmann-mcp
    gcloud run deploy taxmann-mcp \
-     --image asia-south1-docker.pkg.dev/<project>/taxmann-mcp/taxmann-mcp \
+     --image asia-south1-docker.pkg.dev/my-primary-project-228515/taxmann-mcp/taxmann-mcp \
      --region asia-south1 --allow-unauthenticated \
-     --set-env-vars STORAGE_BUCKET=<project>.firebasestorage.app,SECRET_MANAGER_PROJECT=<project>
+     --set-env-vars STORAGE_BUCKET=my-primary-project-228515.appspot.com
    ```
+   (No DEK env var needed — the image ships a fallback DEK; override with
+   `TAXMANN_DEK` or Secret Manager `taxmann_creds_dek` when you rotate.)
 
-4. **Deploy Hosting + rules**:
+3. **Deploy Hosting + rules** (productively, CLI Login page later
+   — currently the static portal is served by Cloud Run, so this step is
+   optional unless Firebase Hosting is used):
    ```bash
    cd taxmann-mcp
-   firebase use <project>
+   firebase use my-primary-project-228515
    firebase deploy --only hosting,firestore:rules,storage:rules
    ```
 
-5. **Smoke test**: in any MCP client (Claude Desktop, mcp-remote), add
-   `https://<project>.web.app/mcp`. The OAuth flow opens the portal for
-   Firebase login; then configure TaxMann creds on `/settings` (Test & Save),
-   run a search → open a document, confirm chunk 1 is a Storage cache hit,
-   and check `/dashboard` counters.
+4. **Smoke test the OAuth flow** — the authorize endpoint must redirect
+   (302) to the portal, never 500:
+   ```bash
+   curl -i "https://taxmann-mcp-jjsa4ya54a-el.a.run.app/auth/authorize?\
+   response_type=code&client_id=<id>&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&\
+   code_challenge=<verifier-sha256-b64url>&code_challenge_method=S256&state=test"
+   # expect: 302 Location /?auth_request_id=...
+   ```
+   Then in any MCP client (Claude Desktop, mcp-remote) point at
+   `https://taxmann-mcp-jjsa4ya54a-el.a.run.app/mcp`. The OAuth flow opens
+   the portal for Firebase login; then configure TaxMann creds on `/settings`
+   (Test & Save), run a search → open a document, confirm chunk 1 is a Storage
+   cache hit, and check `/dashboard` counters.
 
 ## Open questions (from memory/mcp-plan.md)
 

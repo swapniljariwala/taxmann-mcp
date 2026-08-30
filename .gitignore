@@ -40,6 +40,7 @@ coverage.xml
 .pytest_cache/
 # Logs
 *.log
+logs/
 # IDEs
 .idea/
 .vscode/

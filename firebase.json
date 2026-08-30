@@ -18,7 +18,7 @@
     "rules": "firestore.rules"
   },
   "storage": {
-    "rules": "storage.rules"
+    "rules": "storage.rules", "target": "rules"
   },
   "emulators": {
     "auth": { "port": 9099 },
