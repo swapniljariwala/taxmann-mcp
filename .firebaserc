@@ -1,5 +1,15 @@
 {
   "projects": {
-    "default": "taxmann-mcp"
-  }
+    "default": "my-primary-project-228515"
+  },
+  "targets": {
+    "my-primary-project-228515": {
+      "storage": {
+        "rules": [
+          "my-primary-project-228515.appspot.com"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

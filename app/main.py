@@ -29,6 +29,7 @@ import contextvars
 import hashlib
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import math
 import os
 import pathlib
@@ -41,9 +42,20 @@ from typing import Annotated, Any, Callable, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
+_LOGS_DIR = pathlib.Path(__file__).resolve().parent.parent / "logs"
+_LOGS_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        RotatingFileHandler(
+            _LOGS_DIR / "app.log",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        ),
+    ],
 )
 log = logging.getLogger("taxmann-mcp")
 
@@ -115,7 +127,7 @@ _user_uid: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 # ---------------------------------------------------------------------------
 
 log.info("Initializing Firebase Admin SDK...")
-_storage_bucket = os.environ.get("STORAGE_BUCKET", "taxmann-mcp.firebasestorage.app")
+_storage_bucket = os.environ.get("STORAGE_BUCKET", "my-primary-project-228515.appspot.com")
 firebase_admin.initialize_app(options={"storageBucket": _storage_bucket})
 log.info("Firebase Admin SDK initialized. Storage bucket: %s", _storage_bucket)
 _db: firestore.Client | None = None
@@ -204,6 +216,11 @@ async def health() -> dict:
 
 _dek: bytes | None = None
 
+# Fallback DEK baked into the image (dev convenience — "for now").
+# Same value as .env's TAXMANN_DEK; overrides via TAXMANN_DEK or Secret
+# Manager still take precedence. Rotate in Secret Manager before this ships.
+_FALLBACK_DEK = "+ySPoyzQSUd/BXzGDuKugfJ7BA82ox3Duqbojls1yQ8="
+
 
 def _load_dek() -> bytes | None:
     """
@@ -215,7 +232,7 @@ def _load_dek() -> bytes | None:
     if _dek is not None:
         return _dek
 
-    encoded = os.environ.get("TAXMANN_DEK", "").strip()
+    encoded = os.environ.get("TAXMANN_DEK", _FALLBACK_DEK).strip()
     if encoded:
         try:
             _dek = base64.b64decode(encoded, validate=True)
@@ -948,7 +965,7 @@ async def get_tabs(
 )
 async def open_document(
     file_id:       Annotated[str, Query(description="Document file_id from search_documents.")],
-    category_name: Annotated[str, Query(description="Category name of the document (from search_documents).")],
+    category_name: Annotated[str, Query(description="The category_slug field from search_documents (NOT the display category name — display names like 'GST' are rejected by the portal). Pass the slug verbatim; it may be empty (GST results have no slug, and an empty value is always accepted).")],
     search_text:   Annotated[str, Query(description="Optional search text to highlight in the document.")] = "",
     chunk:         Annotated[int, Query(description="Chunk index, 0-indexed.")] = 0,
     uid:           str = Depends(require_uid),
